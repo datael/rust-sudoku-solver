@@ -1,8 +1,11 @@
-use std::fmt::{Display, Error, Formatter};
+use std::{
+    fmt::{Display, Error, Formatter},
+    rc::Rc,
+};
 
 #[derive(Debug)]
 struct Gameboard<const X: usize, const Y: usize> {
-    state: [[u8; Y]; X],
+    state: [[u8; X]; Y],
 }
 
 impl<const X: usize, const Y: usize> Gameboard<X, Y> {
@@ -31,8 +34,8 @@ impl<const X: usize, const Y: usize> Display for Gameboard<X, Y> {
     }
 }
 
-impl<const X: usize, const Y: usize> From<[[u8; Y]; X]> for Gameboard<X, Y> {
-    fn from(value: [[u8; Y]; X]) -> Self {
+impl<const X: usize, const Y: usize> From<[[u8; X]; Y]> for Gameboard<X, Y> {
+    fn from(value: [[u8; X]; Y]) -> Self {
         Self {
             state: value.clone(),
         }
@@ -93,13 +96,13 @@ impl<const X: usize, const Y: usize> Candidates<X, Y> {
 }
 
 trait Rule<const X: usize, const Y: usize> {
-    fn visit(gameboard: &Gameboard<X, Y>, candidates: &mut Candidates<X, Y>);
+    fn visit(&self, gameboard: &Gameboard<X, Y>, candidates: &mut Candidates<X, Y>);
 }
 
 struct ExcludeWhenSolved;
 
 impl<const X: usize, const Y: usize> Rule<X, Y> for ExcludeWhenSolved {
-    fn visit(gameboard: &Gameboard<X, Y>, candidates: &mut Candidates<X, Y>) {
+    fn visit(&self, gameboard: &Gameboard<X, Y>, candidates: &mut Candidates<X, Y>) {
         for x in 0..X {
             for y in 0..Y {
                 if gameboard.state[x][y] == 0 {
@@ -112,172 +115,62 @@ impl<const X: usize, const Y: usize> Rule<X, Y> for ExcludeWhenSolved {
     }
 }
 
-struct UniqueByRow;
+#[derive(Clone)]
+struct Region {
+    positions: Rc<Vec<(usize, usize)>>,
+}
 
-impl<const X: usize, const Y: usize> Rule<X, Y> for UniqueByRow {
-    fn visit(gameboard: &Gameboard<X, Y>, candidates: &mut Candidates<X, Y>) {
-        for x in 0..X {
-            for y in 0..Y {
-                if gameboard.state[x][y] == 0 {
+impl Region {
+    fn new(positions: Vec<(usize, usize)>) -> Self {
+        Self {
+            positions: Rc::new(positions),
+        }
+    }
+}
+
+struct UniqueByRegion(Rc<Region>);
+
+impl<const X: usize, const Y: usize> Rule<X, Y> for UniqueByRegion {
+    fn visit(&self, gameboard: &Gameboard<X, Y>, candidates: &mut Candidates<X, Y>) {
+        for (x, y) in self.0.positions.iter() {
+            if gameboard.state[*x][*y] == 0 {
+                continue;
+            };
+
+            for (x2, y2) in self.0.positions.iter() {
+                if (x2, y2) == (x, y) {
                     continue;
-                };
-
-                for y2 in 0..Y {
-                    candidates.exclude_candidate(x, y2, gameboard.state[x][y]);
                 }
+
+                candidates.exclude_candidate(*x2, *y2, gameboard.state[*x][*y]);
             }
         }
     }
 }
 
-struct UniqueByColumn;
+struct FillRegionUniquely(Rc<Region>);
 
-impl<const X: usize, const Y: usize> Rule<X, Y> for UniqueByColumn {
-    fn visit(gameboard: &Gameboard<X, Y>, candidates: &mut Candidates<X, Y>) {
-        for x in 0..X {
-            for y in 0..Y {
-                if gameboard.state[x][y] == 0 {
-                    continue;
-                };
+impl<const X: usize, const Y: usize> Rule<X, Y> for FillRegionUniquely {
+    fn visit(&self, _: &Gameboard<X, Y>, candidates: &mut Candidates<X, Y>) {
+        'next_n: for n in 1..=9 {
+            let mut solo_position = None;
 
-                for x2 in 0..X {
-                    candidates.exclude_candidate(x2, y, gameboard.state[x][y]);
-                }
-            }
-        }
-    }
-}
-
-struct FillColumnUniquely;
-
-impl<const X: usize, const Y: usize> Rule<X, Y> for FillColumnUniquely {
-    fn visit(_: &Gameboard<X, Y>, candidates: &mut Candidates<X, Y>) {
-        for x in 0..X {
-            'next_n: for n in 1..=9 {
-                let mut solo_position = None;
-
-                for y in 0..Y {
-                    if candidates.cells[x][y] & n.to_cell_mask() > 0 {
-                        if solo_position != None {
-                            continue 'next_n;
-                        } else {
-                            solo_position = Some(y);
-                        }
-                    }
-                }
-
-                if let Some(y) = solo_position {
-                    for y2 in 0..Y {
-                        if y2 == y {
-                            candidates.set_exclusive_candidate(x, y2, n);
-                        } else {
-                            candidates.exclude_candidate(x, y2, n);
-                        }
+            for (x, y) in self.0.positions.iter() {
+                if candidates.cells[*x][*y] & n.to_cell_mask() > 0 {
+                    if solo_position != None {
+                        continue 'next_n;
+                    } else {
+                        solo_position = Some((x, y));
                     }
                 }
             }
-        }
-    }
-}
 
-struct FillRowUniquely;
-
-impl<const X: usize, const Y: usize> Rule<X, Y> for FillRowUniquely {
-    fn visit(_: &Gameboard<X, Y>, candidates: &mut Candidates<X, Y>) {
-        for y in 0..Y {
-            'next_n: for n in 1..=9 {
-                let mut solo_position = None;
-
-                for x in 0..X {
-                    if candidates.cells[x][y] & n.to_cell_mask() > 0 {
-                        if solo_position != None {
-                            continue 'next_n;
-                        } else {
-                            solo_position = Some(x);
-                        }
-                    }
-                }
-
-                if let Some(x) = solo_position {
-                    for x2 in 0..X {
-                        if x2 == x {
-                            candidates.set_exclusive_candidate(x2, y, n);
-                        } else {
-                            candidates.exclude_candidate(x2, y, n);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct UniqueBy3x3Box;
-
-impl Rule<9, 9> for UniqueBy3x3Box {
-    fn visit(gameboard: &Gameboard<9, 9>, candidates: &mut Candidates<9, 9>) {
-        for x_outer in 0..3 {
-            for y_outer in 0..3 {
-                for x_inner in 0..3 {
-                    for y_inner in 0..3 {
-                        let x = x_outer * 3 + x_inner;
-                        let y = y_outer * 3 + y_inner;
-
-                        if gameboard.state[x][y] == 0 {
-                            continue;
-                        };
-
-                        for x_inner2 in 0..3 {
-                            for y_inner2 in 0..3 {
-                                let x2 = x_outer * 3 + x_inner2;
-                                let y2 = y_outer * 3 + y_inner2;
-                                candidates.exclude_candidate(x2, y2, gameboard.state[x][y]);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct Fill3x3BoxUniquely;
-
-impl Rule<9, 9> for Fill3x3BoxUniquely {
-    fn visit(_: &Gameboard<9, 9>, candidates: &mut Candidates<9, 9>) {
-        for x_outer in 0..3 {
-            for y_outer in 0..3 {
-                'next_n: for n in 1..=9 {
-                    let mut solo_position = None;
-
-                    for x_inner in 0..3 {
-                        for y_inner in 0..3 {
-                            let x = x_outer * 3 + x_inner;
-                            let y = y_outer * 3 + y_inner;
-
-                            if candidates.cells[x][y] & n.to_cell_mask() > 0 {
-                                if solo_position != None {
-                                    continue 'next_n;
-                                } else {
-                                    solo_position = Some((x, y));
-                                }
-                            }
-                        }
-                    }
-
-                    if let Some((x, y)) = solo_position {
-                        for x_inner2 in 0..3 {
-                            for y_inner2 in 0..3 {
-                                let x2 = x_outer * 3 + x_inner2;
-                                let y2 = y_outer * 3 + y_inner2;
-
-                                if (x2, y2) == (x, y) {
-                                    candidates.set_exclusive_candidate(x2, y2, n);
-                                } else {
-                                    candidates.exclude_candidate(x2, y2, n);
-                                }
-                            }
-                        }
+            if let Some((x, y)) = solo_position {
+                for (x2, y2) in self.0.positions.iter() {
+                    if (x2, y2) == (x, y) {
+                        candidates.set_exclusive_candidate(*x2, *y2, n);
+                    } else {
+                        candidates.exclude_candidate(*x2, *y2, n);
                     }
                 }
             }
@@ -299,16 +192,14 @@ fn main() {
     ]
     .into();
 
+    let rules = build_9x9_rules();
+
     let mut candidates = Candidates::<9, 9>::default();
 
     loop {
-        ExcludeWhenSolved::visit(&gameboard, &mut candidates);
-        UniqueByColumn::visit(&gameboard, &mut candidates);
-        UniqueByRow::visit(&gameboard, &mut candidates);
-        UniqueBy3x3Box::visit(&gameboard, &mut candidates);
-        FillColumnUniquely::visit(&gameboard, &mut candidates);
-        FillRowUniquely::visit(&gameboard, &mut candidates);
-        Fill3x3BoxUniquely::visit(&gameboard, &mut candidates);
+        for rule in rules.iter() {
+            rule.visit(&gameboard, &mut candidates);
+        }
 
         if !candidates.apply_uniques(&mut gameboard) {
             break;
@@ -317,4 +208,56 @@ fn main() {
 
     println!("{}", gameboard);
     println!("{:?}", candidates);
+}
+
+fn build_9x9_rules() -> Vec<Box<dyn Rule<9, 9>>> {
+    let mut rules: Vec<Box<dyn Rule<9, 9>>> = vec![];
+
+    let regions: Vec<Rc<Region>> = build_9x9_regions()
+        .iter()
+        .cloned()
+        .map(Region::new)
+        .map(Rc::new)
+        .collect();
+
+    rules.push(Box::new(ExcludeWhenSolved {}));
+
+    for region in regions.iter() {
+        rules.push(Box::new(UniqueByRegion(region.clone())));
+    }
+
+    for region in regions.iter() {
+        rules.push(Box::new(FillRegionUniquely(region.clone())));
+    }
+
+    rules
+}
+
+fn build_9x9_regions() -> Vec<Vec<(usize, usize)>> {
+    let mut regions: Vec<Vec<(usize, usize)>> = vec![];
+
+    // rows
+    for x in 0..9 {
+        regions.push((0..9).map(|y| (x, y)).collect());
+    }
+
+    // columns
+    for y in 0..9 {
+        regions.push((0..9).map(|x| (x, y)).collect());
+    }
+
+    // 3x3 boxes
+    for x_outer in 0..3 {
+        for y_outer in 0..3 {
+            regions.push(
+                (0..3)
+                    .flat_map(|x_inner| {
+                        (0..3).map(move |y_inner| (x_outer * 3 + x_inner, y_outer * 3 + y_inner))
+                    })
+                    .collect(),
+            );
+        }
+    }
+
+    regions
 }
