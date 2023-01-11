@@ -1,3 +1,5 @@
+#![deny(clippy::pedantic)]
+
 use std::{
     fmt::{Display, Error, Formatter},
     rc::Rc,
@@ -23,11 +25,11 @@ impl<const X: usize, const Y: usize> Display for Gameboard<X, Y> {
                     "{} ",
                     match self.state[x][y] {
                         0 => ".".to_string(),
-                        a => format!("{}", a),
+                        a => format!("{a}"),
                     },
                 )?;
             }
-            write!(f, "\n")?;
+            writeln!(f)?;
         }
 
         Ok(())
@@ -36,14 +38,16 @@ impl<const X: usize, const Y: usize> Display for Gameboard<X, Y> {
 
 impl<const X: usize, const Y: usize> From<[[u8; X]; Y]> for Gameboard<X, Y> {
     fn from(value: [[u8; X]; Y]) -> Self {
-        Self {
-            state: value.clone(),
-        }
+        Self { state: value }
     }
 }
 
 trait ToCellMask {
     fn to_cell_mask(self) -> u16;
+}
+
+trait ToResult {
+    fn to_result(self) -> u8;
 }
 
 #[derive(Debug)]
@@ -61,7 +65,14 @@ impl<const X: usize, const Y: usize> Default for Candidates<X, Y> {
 
 impl ToCellMask for u8 {
     fn to_cell_mask(self) -> u16 {
-        1 << self - 1
+        1 << (self - 1)
+    }
+}
+
+impl ToResult for u16 {
+    #[allow(clippy::cast_possible_truncation)]
+    fn to_result(self) -> u8 {
+        self.ilog2() as u8 + 1
     }
 }
 
@@ -72,7 +83,7 @@ impl<const X: usize, const Y: usize> Candidates<X, Y> {
         for x in 0..X {
             for y in 0..Y {
                 if self.remaining_candidates(x, y) == 1 {
-                    gameboard.set_cell(x, y, (self.cells[x][y] as f32).log2() as u8 + 1);
+                    gameboard.set_cell(x, y, self.cells[x][y].to_result());
                     changes_made = true;
                 }
             }
@@ -157,11 +168,11 @@ impl<const X: usize, const Y: usize> Rule<X, Y> for FillRegionUniquely {
 
             for (x, y) in self.0.positions.iter() {
                 if candidates.cells[*x][*y] & n.to_cell_mask() > 0 {
-                    if solo_position != None {
+                    if solo_position.is_some() {
                         continue 'next_n;
-                    } else {
-                        solo_position = Some((x, y));
                     }
+
+                    solo_position = Some((x, y));
                 }
             }
 
@@ -197,7 +208,7 @@ fn main() {
     let mut candidates = Candidates::<9, 9>::default();
 
     loop {
-        for rule in rules.iter() {
+        for rule in &rules {
             rule.visit(&gameboard, &mut candidates);
         }
 
@@ -206,8 +217,8 @@ fn main() {
         }
     }
 
-    println!("{}", gameboard);
-    println!("{:?}", candidates);
+    println!("{gameboard}");
+    println!("{candidates:?}");
 }
 
 fn build_9x9_rules() -> Vec<Box<dyn Rule<9, 9>>> {
@@ -222,11 +233,11 @@ fn build_9x9_rules() -> Vec<Box<dyn Rule<9, 9>>> {
 
     rules.push(Box::new(ExcludeWhenSolved {}));
 
-    for region in regions.iter() {
+    for region in &regions {
         rules.push(Box::new(UniqueByRegion(region.clone())));
     }
 
-    for region in regions.iter() {
+    for region in &regions {
         rules.push(Box::new(FillRegionUniquely(region.clone())));
     }
 
